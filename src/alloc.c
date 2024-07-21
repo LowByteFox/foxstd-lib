@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define STACK_SIZE 128
 #define MUL_NO_OVERFLOW ((size_t) 1 << (sizeof(size_t) * 4))
 
 enum FLAGS {
@@ -19,13 +20,47 @@ enum FLAGS {
     DUMPC = 1 << 5,
 };
 
+/* private hashmap start */
+enum _state {
+    EMPTY,
+    VALID,
+    DELETED
+};
+
+struct _allocation_info {
+    /* void *trace[STACK_SIZE]; */
+    bool freed;
+};
+
+struct _hashmap_pair {
+    enum _state state;
+    void *key;
+    struct _allocation_info value;
+};
+
+struct _hashmap {
+    usize len;
+    usize cap;
+    struct _hashmap_pair *pairs;
+};
+
+static u32      _djb2(const void *bytes, usize len);
+static usize    hashmap_insert(struct _hashmap *hm, void *key,
+                    struct _allocation_info *info);
+static void     hashmap_remove(struct _hashmap *hm, usize it);
+static usize    hashmap_find(const struct _hashmap *hm, void *key);
+static bool     hashmap_resize(struct _hashmap *hm);
+/* private hashmap end */
+
 const char *fox_alloc_options = NULL;
 
 static u8 alloc_flags = 0 | LOUD; /* make it "loud" */
+static struct _hashmap table = {0};
 
 static bool initialized = false;
 static void _fox_alloc_init();
 static void _fox_alloc_dump();
+
 
 static void *(*_malloc)(usize) = malloc;
 static void *(*_calloc)(usize, usize) = calloc;
@@ -53,6 +88,12 @@ void *fox_alloc(usize size)
 
     if (alloc_flags & LOUD)
         memset(ptr->data, 0xAA, size);
+
+    if (alloc_flags & DUMPC || alloc_flags & FCHECK) {
+        struct _allocation_info info = {0};
+        info.freed = false;
+        hashmap_insert(&table, ptr, &info);
+    }
 
     ptr->allocated = size;
 
@@ -89,6 +130,13 @@ void *fox_realloc(void *ptr, usize new_size)
     if (alloc_flags & LOUD)
         memset(next->data + current_size, 0xAA, new_size - current_size);
 
+    if (alloc_flags & DUMPC || alloc_flags & FCHECK)
+        if (p != next) {
+            struct _allocation_info info = table.pairs[hashmap_find(&table, p)].value;
+            hashmap_remove(&table, hashmap_find(&table, p));
+            hashmap_insert(&table, ptr, &info);
+        }
+
     next->allocated = new_size;
 
     if (alloc_flags & VERBOSE)
@@ -124,6 +172,13 @@ void *fox_recalloc(void *ptr, usize new_size)
         memset(next->data + new_size, 0, 100);
     }
 
+    if (alloc_flags & DUMPC || alloc_flags & FCHECK)
+        if (p != next) {
+            struct _allocation_info info = table.pairs[hashmap_find(&table, p)].value;
+            hashmap_remove(&table, hashmap_find(&table, p));
+            hashmap_insert(&table, ptr, &info);
+        }
+
     next->allocated = new_size;
 
     if (alloc_flags & VERBOSE)
@@ -137,6 +192,18 @@ void fox_free(void *ptr)
 {
     if (ptr == NULL)
         return;
+
+    struct foxptr *p = fox_visualize(ptr);
+
+    if (alloc_flags & FCHECK) {
+        struct _allocation_info info = table.pairs[hashmap_find(&table, p)].value;
+        if (info.freed) {
+            fprintf(stderr, "*** double free detected ***: terminated\n");
+            abort();
+        }
+
+        table.pairs[hashmap_find(&table, p)].value.freed = true;
+    }
 
     if (alloc_flags & CANARY) {
         if (!fox_check(ptr)) {
@@ -190,7 +257,14 @@ void *fox_alloczero(usize size)
         return NULL;
     }
 
+    if (alloc_flags & DUMPC || alloc_flags & FCHECK) {
+        struct _allocation_info info = {0};
+        info.freed = false;
+        hashmap_insert(&table, ptr, &info);
+    }
+
     ptr->allocated = size;
+
     if (alloc_flags & VERBOSE)
         fprintf(stderr, "Allocated %ld bytes for pointer %p\n", size, ptr->data
             );
@@ -204,6 +278,16 @@ void fox_freezero(void *ptr)
         return;
 
     struct foxptr *p = fox_visualize(ptr);
+
+    if (alloc_flags & FCHECK) {
+        struct _allocation_info info = table.pairs[hashmap_find(&table, p)].value;
+        if (info.freed) {
+            fprintf(stderr, "*** double free detected ***: terminated\n");
+            abort();
+        }
+
+        table.pairs[hashmap_find(&table, p)].value.freed = true;
+    }
 
     if (alloc_flags & CANARY) {
         if (!fox_check(ptr)) {
@@ -317,3 +401,98 @@ static void _fox_alloc_dump()
 {
     printf("dumping nothing yet\n");
 }
+
+/* private hashmap start */
+static u32 _djb2(const void *bytes, usize len)
+{
+    const u8 *ptr = bytes;
+    u32 hash = 5381;
+    for (usize i = 0; i < len; ++i)
+        hash = hash * 33 + ptr[i];
+
+    return hash;
+}
+
+static usize hashmap_insert(struct _hashmap *hm, void *key,
+    struct _allocation_info *info)
+{
+    if (!hashmap_resize(hm))
+        return hm->cap;
+
+    size_t it = _djb2(&key, sizeof(void*)) % hm->cap;
+
+    while (hm->pairs[it].state == VALID && memcmp(&key, &hm->pairs[it].key,
+        sizeof(void*)))
+        it = (it + 1) % hm->cap;
+
+    if (hm->pairs[it].state != VALID)
+        hm->len += 1;
+
+    hm->pairs[it].state = VALID;
+    hm->pairs[it].key = key;
+    hm->pairs[it].value = *info;
+
+    return it;
+}
+
+static usize hashmap_find(const struct _hashmap *hm, void *key)
+{
+    if (hm->cap == 0)
+        return hm->cap;
+
+    usize it = _djb2(&key, sizeof(void*)) % hm->cap;
+
+    while (hm->pairs[it].state == VALID && memcmp(&key, &hm->pairs[it].key,
+        sizeof(void*)))
+            it = (it + 1) % hm->cap;
+
+    if (hm->pairs[it].state != VALID)
+        return hm->cap;
+
+    return it;
+}
+
+static void hashmap_remove(struct _hashmap *hm, size_t it)
+{
+    hm->pairs[it].state = DELETED;
+    hm->len -= 1;
+    hashmap_resize(hm);
+}
+
+static bool hashmap_resize(struct _hashmap *hm)
+{
+    size_t oldCap = hm->cap;
+    size_t newCap;
+
+    if (!hm->cap || hm->len * 4 > hm->cap * 3) {
+        newCap = oldCap > 0 ? oldCap * 2 : 128;
+    } else if (hm->cap > 128 && hm->len * 4 < hm->cap) {
+        newCap = oldCap / 2;
+    } else {
+        return true;
+    }
+
+    struct _hashmap_pair *new_pairs = calloc(newCap, sizeof(*new_pairs));
+
+    if (!new_pairs)
+        return false;
+
+    for (size_t i = 0; i < oldCap; ++i) {
+        if (hm->pairs[i].state != VALID)
+            continue;
+        size_t it = _djb2(&hm->pairs[i].key, sizeof(void*)) % newCap;
+        while (new_pairs[it].state == VALID)
+            it = (it + 1) % newCap;
+
+        new_pairs[it].state = VALID;
+        new_pairs[it].key = hm->pairs[i].key;
+        new_pairs[it].value = hm->pairs[i].value;
+    }
+
+    free(hm->pairs);
+    hm->pairs = new_pairs;
+    hm->cap = newCap;
+
+    return true;
+}
+/* private hashmap end */

@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 int main() {
-    fox_alloc_options = "CVX";
+    fox_alloc_options = "CVXF";
 
     int *ptr = fox_alloc(sizeof(int));
 
