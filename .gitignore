@@ -1,2 +1,3 @@
 *.o
 .clangd
+memdump.foxstd

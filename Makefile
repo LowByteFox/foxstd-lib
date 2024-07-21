@@ -14,7 +14,7 @@ lib/libfoxstd.a: $(OBJS)
 	$(AR) rcs $@ $(OBJS)
 
 clean:
-	rm -rf test lib $(OBJS) test.o
+	rm -rf test lib $(OBJS) test.o *.foxstd
 
 .c.o:
 	$(CC) -c $(CFLAGS) -o $@ $<

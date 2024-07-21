@@ -195,9 +195,9 @@ void fox_free(void *ptr)
 
     struct foxptr *p = fox_visualize(ptr);
 
-    if (alloc_flags & FCHECK) {
+    if (alloc_flags & DUMPC || alloc_flags & FCHECK) {
         struct _allocation_info info = table.pairs[hashmap_find(&table, p)].value;
-        if (info.freed) {
+        if (info.freed && alloc_flags & FCHECK) {
             fprintf(stderr, "*** double free detected ***: terminated\n");
             abort();
         }
@@ -279,9 +279,9 @@ void fox_freezero(void *ptr)
 
     struct foxptr *p = fox_visualize(ptr);
 
-    if (alloc_flags & FCHECK) {
+    if (alloc_flags & DUMPC || alloc_flags & FCHECK) {
         struct _allocation_info info = table.pairs[hashmap_find(&table, p)].value;
-        if (info.freed) {
+        if (info.freed && alloc_flags & FCHECK) {
             fprintf(stderr, "*** double free detected ***: terminated\n");
             abort();
         }
@@ -399,7 +399,44 @@ static void _fox_alloc_init()
 
 static void _fox_alloc_dump()
 {
-    printf("dumping nothing yet\n");
+    int magic = 0, screaming = 0;
+
+    FILE *dump_file = fopen("memdump.foxstd", "w");
+    if (alloc_flags & DUMPC)
+        magic = 1;
+
+    fwrite(&magic, sizeof(int), 1, dump_file);
+
+    for (usize i = 0; i < table.cap; i++) {
+        struct _hashmap_pair *it = table.pairs + i;
+        if (it->state == VALID && !it->value.freed) {
+            struct foxptr *ptr = it->key;
+
+            if (alloc_flags & LOUD) {
+                screaming = 1;
+                u8 *data = ptr->data;
+                for (usize j = 0; j < ptr->allocated; j++) {
+                    if (data[j] != 0xAA) {
+                        screaming = 0;
+                        break;
+                    }
+                }
+            }
+
+            /* screaming, address, size, content */
+
+            void **addr = (void*) &ptr->data;
+
+            fwrite(&screaming, sizeof(int), 1, dump_file);
+            fwrite(&addr, sizeof(void*), 1, dump_file);
+            fwrite(&ptr->allocated, sizeof(usize), 1, dump_file);
+
+            if (magic)
+                fwrite(ptr->data, sizeof(u8), ptr->allocated, dump_file);
+        }
+    }
+
+    fclose(dump_file);
 }
 
 /* private hashmap start */
