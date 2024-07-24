@@ -2,21 +2,23 @@ AR = ar
 CC = c99
 CFLAGS = -g -Iinclude
 
-OBJS = src/alloc.o
+OBJS = src/alloc.o src/vec.o
 
-all: lib/libfoxstd.a test
+all: lib/libfoxstd.a
 
-test: lib/libfoxstd.a test.o
-	$(CC) $(CFLAGS) -o $@ test.o -Llib -lfoxstd
+tests: all
+	@mkdir -p bin
+	$(MAKE) -C tests
 
 lib/libfoxstd.a: $(OBJS)
 	@mkdir -p lib
 	$(AR) rcs $@ $(OBJS)
 
 clean:
-	rm -rf test lib $(OBJS) test.o *.foxstd
+	rm -rf lib bin $(OBJS) *.foxstd
 
 .c.o:
 	$(CC) -c $(CFLAGS) -o $@ $<
 
+.PHONY: all clean tests
 .SUFFIXES: .c

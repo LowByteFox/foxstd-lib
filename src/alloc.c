@@ -107,7 +107,7 @@ void *fox_alloc(usize size)
 void *fox_realloc(void *ptr, usize new_size)
 {
     if (ptr == NULL)
-        return NULL;
+        return fox_alloc(new_size);
 
     struct foxptr *p = fox_visualize(ptr);
     usize current_size = p->allocated;
@@ -149,7 +149,7 @@ void *fox_realloc(void *ptr, usize new_size)
 void *fox_recalloc(void *ptr, usize new_size)
 {
     if (ptr == NULL)
-        return NULL;
+        return fox_alloczero(new_size);
 
     struct foxptr *p = fox_visualize(ptr);
     usize current_size = p->allocated;
@@ -321,6 +321,9 @@ bool fox_check(void *ptr)
 
 usize fox_allocated(void *ptr)
 {
+    if (ptr == NULL)
+        return 0;
+
     struct foxptr *p = fox_visualize(ptr);
 
     return p->allocated;

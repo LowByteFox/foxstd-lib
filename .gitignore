@@ -1,3 +1,5 @@
 *.o
 .clangd
 memdump.foxstd
+bin
+lib
