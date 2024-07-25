@@ -2,7 +2,7 @@ AR = ar
 CC = c99
 CFLAGS = -g -Iinclude
 
-OBJS = src/alloc.o src/vec.o
+OBJS = src/alloc.o src/vec.o src/utils.o
 
 all: lib/libfoxstd.a
 
